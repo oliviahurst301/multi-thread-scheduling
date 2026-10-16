@@ -8,11 +8,11 @@
     - simulate its crossing time once allowed
     - terminate after crossing the track
 
-2. 
-    - There will be no overall controller thread. 
+2. There will be no overall controller thread. 
     - Each train thread will handle its own loading, waiting, and crossing. 
     - Once loaded, train threads will coordinate using the queues, mutex, and condition variables. 
-    - Scheduling rules will determine when each waiting train is eligible to cross  
+    - Scheduling rules will determine when each waiting train is 
+eligible to cross
 
 3. One mutex will be used for the shared scheduling state. It will protect:
     - the four station queues
@@ -69,37 +69,25 @@
 
 8. Overall sample algorithm:
 
-    main reads input file and creates thread for each train
-     
-    trains wait on start convar
-     
-    once all threads created, main starts simulation and wakes 
-    all train threads
-
-    trains sleep for specified loading times
-    
-    once loaded, train acquires mutex and enters corresponding
-    FIFO queue
-    
-    train checks if it can cross per scheduling rules
-    
-    if train can't cross, wait on scheduling convar and check
-    again when awakened
-    
-    if train can cross, remove self from queue and mark track as
-    occupied
-    
-    train releases mutex, sleeps during crossing time
-    
-    after crossing, train reacquires mutex and marks track as
-    unoccupied
-
-    train updates previous direction and consecutive-train
-    information
-
-    train wakes waiting trains so they can check scheduling rules
-
-    train releases mutex and terminates
-
-    main joins all threads, terminates after every train has
-    finished
+    - main reads input file and creates thread for each train
+    - trains wait on start convar
+    - once all threads created, main starts simulation and wakes 
+    - all train threads
+    - trains sleep for specified loading times
+    - once loaded, train acquires mutex and enters corresponding
+      FIFO queue
+    - train checks if it can cross per scheduling rules
+    - if train can't cross, wait on scheduling convar and check
+      again when awakened
+    - if train can cross, remove self from queue and mark track 
+      as occupied
+    - train releases mutex, sleeps during crossing time
+    - after crossing, train reacquires mutex and marks track as
+      unoccupied
+    - train updates previous direction and consecutive-train
+     information
+    - train wakes waiting trains so they can check scheduling
+      rules
+    - train releases mutex and terminates
+    - main joins all threads, terminates after every train has
+      finished
