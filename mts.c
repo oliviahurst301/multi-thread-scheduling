@@ -1,5 +1,5 @@
 #include <pthread.h>
-#include <stdlibc.h>
+#include <stdlib.h>
 
 #define MAX_TRAINS 65
 
@@ -7,7 +7,7 @@
 typedef struct {
     int number;
     char direction;
-    int priority
+    int priority;
     int loading_time;
     int crossing_time;
 } Train;
@@ -24,7 +24,7 @@ typedef struct {
 typedef struct {
     TrainQueue high_priority;
     TrainQueue low_priority;
-} Staion;
+} Station;
 
 /* Shared scheduling state */
 Station east_station;
