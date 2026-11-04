@@ -2,8 +2,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <unistd.h>
 
 #define MAX_TRAINS 65
+#define CONVERT_TO_US 100000
 
 typedef enum {
     NONE, // 0
@@ -46,6 +48,7 @@ Station west_station;
 int track_occupied = 0;
 Direction previous_direction = NONE;
 int consecutive_trains = 0;
+pthread_mutex_t scheduling_mutex;
 
 /* Mutex */
 /* Condition variables */
@@ -142,10 +145,20 @@ void read_input_file(FILE *input_file, Train trains[], int *train_count) {
     }
 }   
 
-void load_and_queue() {
-    /*
-    train sleeps for specified loading time
+void prepare_train(Train *train) {
     
+    /* Train sleeps for specified loading time in microseconds */
+    usleep(train -> loading_time * CONVERT_TO_US);
+
+    /* Acquire mutex before entering correct FIFO queue, wait if already acquired */
+    pthread_mutex_lock(&scheduling_mutex);
+
+    queue_train(train);
+
+    /* Release mutex so another thread may acquire it */
+    pthread_mutex_unlock(&scheduling_mutex);
+
+    /*
     once awake:
         - acquire mutex
         
@@ -176,10 +189,15 @@ void check_crossing() {
     */
 }
 
-void *train_thread(void *arg) {
+void *process_train(void *arg) {
+
+    /* Convert generic arg to a Train pointer */
+    Train *train = (Train *)arg;
+    
+    /* Load and queue train */
+    prepare_train(train);
+
     /* 
-    wait for simulation to start
-    load_and_queue()
     check_crossing()
     print train ON track
     release mutex
@@ -194,20 +212,17 @@ void *train_thread(void *arg) {
     release mutex
     terminate thread
     */
+    return NULL;
 }
 
 int main(int argc, char *argv[]) {
     
-    /* Array of Train structs */
+    /* Array of Train structs, threads (one per train) */
     Train trains[MAX_TRAINS];
+    pthread_t train_threads[MAX_TRAINS];
 
     /* Counter to keep track of amt of trains in trains[] */
     int train_count = 0;
-   
-    /* 
-    open file
-    call function to read file, parse args
-    */
 
     /* Check to make sure user entered argument in the form "./mts filename" */
     if (argc < 2) {
@@ -216,6 +231,7 @@ int main(int argc, char *argv[]) {
 
     FILE *file = fopen(argv[1], "r");
 
+    /* Ensure file contains input */
     if (file == NULL) {
         return 1;
     } 
@@ -238,19 +254,29 @@ int main(int argc, char *argv[]) {
         - convars
     */
 
+    /* Initialize station queues */
     initialize_queue(&east_station.high_priority);
     initialize_queue(&east_station.low_priority);
     initialize_queue(&west_station.high_priority);
     initialize_queue(&west_station.low_priority);
 
-    /*
-    create one train_thread for each train 
+    /* Initialize scheduling mutex */
+    pthread_mutex_init(&scheduling_mutex, NULL);
+
+    /* Create a thread for each train, add it to train_threads[] */
+    for (int i = 0; i < train_count; i++) {
+        pthread_create(&train_threads[i], NULL, process_train, &trains[i]);
+    }
+
+    /* Make main() wait for ALL train threads to finish before continuing */
+    for (int i = 0; i < train_count; i++) {
+        pthread_join(train_threads[i], NULL);
+    }
+
+    /* Destory mutexes */
+    pthread_mutex_destroy(&scheduling_mutex);
     
-    start simulation time
-    wake train threads
-
-    join all train threads
-
+    /*
     destroy mutex and convars
 
     return
