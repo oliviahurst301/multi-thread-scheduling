@@ -3,11 +3,22 @@
 
 #define MAX_TRAINS 65
 
+typedef enum {
+    NONE, // 0
+    EAST, // 1
+    WEST // 2
+} Direction;
+
+typedef enum {
+    LOW, // 0 
+    HIGH // 1
+} Priority;
+
 /* Train struct */
 typedef struct {
     int number;
-    char direction;
-    int priority;
+    Direction direction;
+    Priority priority;
     int loading_time;
     int crossing_time;
 } Train;
@@ -31,8 +42,8 @@ Station east_station;
 Station west_station;
 
 int track_occupied = 0;
-char previous_direction = '\0';
-int consectutive_trains = 0;
+Direction previous_direction = NONE;
+int consecutive_trains = 0;
 
 /* Mutex */
 /* Condition variables */
@@ -67,6 +78,30 @@ Train *peek(TrainQueue *queue) {
     }
 
     return queue -> trains[queue -> front];
+}
+
+void queue_train(Train *train) {
+
+    /* Check if train is travelling East */
+    if (train -> direction == EAST) {
+
+        /* Determine priority level, add to appropriate West station queue */
+        if (train -> priority == LOW) {
+            enqueue(&west_station.low_priority, train);
+        }
+        else {
+            enqueue(&west_station.high_priority, train);
+        }
+    }
+    /* Train is travelling West, add to appropriate East station queue*/
+    else {
+        if (train -> priority == LOW) {
+            enqueue(&east_station.low_priority, train);
+        }
+        else {
+            enqueue(&east_station.high_priority, train);
+        }
+    }
 }
 
 void read_input_file() {
@@ -111,7 +146,7 @@ void check_crossing() {
     */
 }
 
-void train_thread() {
+void *train_thread(void *arg) {
     /* 
     wait for simulation to start
     load_and_queue()
@@ -131,17 +166,28 @@ void train_thread() {
     */
 }
 
-void main() {
+int main() {
     /* 
     open file
     call function to read file, parse args
+    */
 
+    /*
     initialize:
         - station queue
         - shared scheduling state
         - mutex
         - convars
+    */
 
+    initialize_queue(&east_station.high_priority);
+    initialize_queue(&east_station.low_priority);
+    initialize_queue(&west_station.high_priority);
+    initialize_queue(&west_station.low_priority);
+
+
+
+    /*
     create one train_thread for each train 
     
     start simulation time
