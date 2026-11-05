@@ -46,11 +46,12 @@ typedef struct {
 Station east_station;
 Station west_station;
 
-int track_occupied = 0;
+bool track_occupied = false;
 Direction previous_direction = NONE;
 int consecutive_trains = 0;
 pthread_mutex_t scheduling_mutex;
 pthread_cond_t start_convar;
+pthread_cond_t scheduling_convar;
 bool start_allowed = false;
 
 /* Mutex */
@@ -109,6 +110,57 @@ void queue_train(Train *train) {
         else {
             enqueue(&east_station.high_priority, train);
         }
+    }
+}
+
+Train *select_next_train() {
+
+    /* Check if there are any high priority trains waiting */
+    bool high_priority_waiting = east_station.high_priority.count > 0 || west_station.high_priority.count > 0;
+
+    /* Pointers to queues that will be considered for scheduling */
+    TrainQueue *east_station_queue;
+    TrainQueue *west_station_queue;
+
+    /* 
+    Select high priority queues if any trains waiting 
+    Otherwise select low priority queues */
+    if (high_priority_waiting) {
+        east_station_queue = &east_station.high_priority;
+        west_station_queue = &west_station.high_priority;
+    }
+    else {
+        east_station_queue = &east_station.low_priority;
+        west_station_queue = &west_station.low_priority;
+    }
+
+    /* Look at first train in each selected queue w/o removing it 
+       Trains depart from station opposite their travelling direction */
+    Train *eastbound_train = peek(west_station_queue);
+    Train *westbound_train = peek(east_station_queue);
+
+    /* If only one direction has a train waiting select that train */
+    if (eastbound_train == NULL && westbound_train != NULL) {
+        return westbound_train;
+    }
+    
+    if (westbound_train == NULL && eastbound_train != NULL) {
+        return eastbound_train;
+    }
+
+    /* If neither direction has a train waiting, don't select anything */
+    if (westbound_train == NULL && eastbound_train == NULL) {
+        return NULL;
+    }
+
+    /* If both directions have waiting trains of same priority:
+        - choose direction opposite to previous crossing
+        - if no train cross yet, choose eastbound           */
+    if (previous_direction == EAST) {
+        return westbound_train;
+    }
+    else {
+        return eastbound_train;
     }
 }
 
@@ -178,10 +230,41 @@ void prepare_train(Train *train) {
     */
 }
 
-void check_crossing() {
-    /*
-    acquire mutex if necessary 
+void check_crossing(Train *train) {
 
+    /* Acquire mutex before accessing shared variable */
+    pthread_mutex_lock(&scheduling_mutex);
+
+    /* While track is occupied or another train has priority:
+       - temporarily release mutex
+       - put thread to sleep while waiting for signal
+       - reacquire mutex once woken                     */
+    while (track_occupied || select_next_train() != train) {
+        pthread_cond_wait(&scheduling_convar, &scheduling_mutex);
+    }
+
+    /* Remove selected train from its station's queue 
+       Eastbound trains depart from west station
+       Westbound trains depart from east station */
+    if (train -> direction == EAST && train -> priority == HIGH) {
+        dequeue(&west_station.high_priority);
+    }                                                
+    else if (train -> direction == EAST && train -> priority == LOW) {
+        dequeue(&west_station.low_priority);
+    }
+    else if (train -> direction == WEST && train -> priority == HIGH) {
+        dequeue(&east_station.high_priority);
+    }
+    else if (train -> direction == WEST && train -> priority == LOW) {
+        dequeue(&east_station.low_priority);
+    }
+
+    /* Train done waiting, claims track */
+    track_occupied = true;
+
+    pthread_mutex_unlock(&scheduling_mutex);
+    
+    /*
     train checks if it can cross per scheduling rules
     
     while train cannot cross:
@@ -199,13 +282,13 @@ void *process_train(void *arg) {
     /* Convert generic arg to a Train pointer */
     Train *train = (Train *)arg;
 
-    /* Acquire mutex before checking shared variable */
+    /* Acquire mutex before accessing shared variable */
     pthread_mutex_lock(&scheduling_mutex);
 
     /* While waiting for all threads to be created:
         - temporarily release mutex
         - put thread to sleep while waiting for signal
-        - reacquire mutex once awoken */
+        - reacquire mutex once woken                 */
     while (start_allowed == false) {
         pthread_cond_wait(&start_convar, &scheduling_mutex);
     }
@@ -277,9 +360,10 @@ int main(int argc, char *argv[]) {
     initialize_queue(&west_station.high_priority);
     initialize_queue(&west_station.low_priority);
 
-    /* Initialize scheduling mutex, start convar */
+    /* Initialize scheduling mutex, convars */
     pthread_mutex_init(&scheduling_mutex, NULL);
     pthread_cond_init(&start_convar, NULL);
+    pthread_cond_init(&scheduling_convar, NULL);
 
     /* Create a thread for each train, add it to train_threads[] */
     for (int i = 0; i < train_count; i++) {
@@ -307,6 +391,7 @@ int main(int argc, char *argv[]) {
     /* Destory mutex and convars */
     pthread_mutex_destroy(&scheduling_mutex);
     pthread_cond_destroy(&start_convar);
+    pthread_cond_destroy(&scheduling_convar);
     
     /*
     destroy convars
