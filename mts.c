@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 #define MAX_TRAINS 65
 #define CONVERT_TO_US 100000
@@ -49,6 +50,8 @@ int track_occupied = 0;
 Direction previous_direction = NONE;
 int consecutive_trains = 0;
 pthread_mutex_t scheduling_mutex;
+pthread_cond_t start_convar;
+bool start_allowed = false;
 
 /* Mutex */
 /* Condition variables */
@@ -155,6 +158,8 @@ void prepare_train(Train *train) {
 
     queue_train(train);
 
+    printf("Train %d finished loading\n", train -> number);
+
     /* Release mutex so another thread may acquire it */
     pthread_mutex_unlock(&scheduling_mutex);
 
@@ -193,8 +198,20 @@ void *process_train(void *arg) {
 
     /* Convert generic arg to a Train pointer */
     Train *train = (Train *)arg;
-    
-    /* Load and queue train */
+
+    /* Acquire mutex before checking shared variable */
+    pthread_mutex_lock(&scheduling_mutex);
+
+    /* While waiting for all threads to be created:
+        - temporarily release mutex
+        - put thread to sleep while waiting for signal
+        - reacquire mutex once awoken */
+    while (start_allowed == false) {
+        pthread_cond_wait(&start_convar, &scheduling_mutex);
+    }
+
+    /* Release mutex, begin loading & queuing */
+    pthread_mutex_unlock(&scheduling_mutex);
     prepare_train(train);
 
     /* 
@@ -260,26 +277,40 @@ int main(int argc, char *argv[]) {
     initialize_queue(&west_station.high_priority);
     initialize_queue(&west_station.low_priority);
 
-    /* Initialize scheduling mutex */
+    /* Initialize scheduling mutex, start convar */
     pthread_mutex_init(&scheduling_mutex, NULL);
+    pthread_cond_init(&start_convar, NULL);
 
     /* Create a thread for each train, add it to train_threads[] */
     for (int i = 0; i < train_count; i++) {
         pthread_create(&train_threads[i], NULL, process_train, &trains[i]);
     }
 
+    /* 
+    Acquire mutex before changing shared variable
+    Wake all threads waiting on start_allowed == true
+    Release mutex 
+    */
+    pthread_mutex_lock(&scheduling_mutex);
+
+    start_allowed = true;
+
+    pthread_cond_broadcast(&start_convar);
+
+    pthread_mutex_unlock(&scheduling_mutex);
+
     /* Make main() wait for ALL train threads to finish before continuing */
     for (int i = 0; i < train_count; i++) {
         pthread_join(train_threads[i], NULL);
     }
 
-    /* Destory mutexes */
+    /* Destory mutex and convars */
     pthread_mutex_destroy(&scheduling_mutex);
+    pthread_cond_destroy(&start_convar);
     
     /*
-    destroy mutex and convars
-
-    return
+    destroy convars
     */
+
     return 0;
 }
