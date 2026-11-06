@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <sys/time.h>
 
 #define MAX_TRAINS 65
 #define CONVERT_TO_US 100000
@@ -59,6 +60,7 @@ pthread_mutex_t scheduling_mutex;
 pthread_cond_t start_convar;
 pthread_cond_t scheduling_convar;
 bool start_allowed = false;
+struct timeval start_time;
 
 /* Mutex */
 /* Condition variables */
@@ -253,7 +255,25 @@ void read_input_file(FILE *input_file, Train trains[], int *train_count) {
         
         (*train_count)++;
     }
-}   
+}
+
+void print_timestamp() {
+    struct timeval current_time;
+    gettimeofday(&current_time, NULL);
+
+    long time_elapsed_us = 
+        (current_time.tv_sec - start_time.tv_sec) * 1000000L + 
+        (current_time.tv_usec - start_time.tv_usec);
+
+    long total_tenths = time_elapsed_us / 100000;
+
+    long hours = total_tenths / 36000;
+    long minutes = (total_tenths / 600) % 60;
+    long seconds = (total_tenths / 10) % 60;
+    long tenths = total_tenths % 10;
+
+    printf("%02ld:%02ld:%02ld.%01ld ", hours, minutes, seconds, tenths);
+}
 
 void prepare_train(Train *train) {
     
@@ -270,24 +290,21 @@ void prepare_train(Train *train) {
     /* Notify waiting trains after a train loads & enters queue */
     pthread_cond_broadcast(&scheduling_convar);
 
-    printf("Train %d finished loading\n", train -> number);
+    /* Create string version of direction enum for output */
+    const char *direction_string;
+
+    if (train -> direction == EAST) {
+        direction_string = "East";
+    }
+    else {
+        direction_string = "West";
+    }
+
+    print_timestamp();
+    printf("Train %2d is ready to go %4s\n", train -> number, direction_string);
 
     /* Release mutex so another thread may acquire it */
     pthread_mutex_unlock(&scheduling_mutex);
-
-    /*
-    once awake:
-        - acquire mutex
-        
-        *** critical section ***
-        - enter correct FIFO queue based on direction and priority
-        - print simulation time, "Train [train #] is ready to go [Direction]"
-        *** end of critical section ***
-
-        - release mutex
-    
-    now check crossing
-    */
 }
 
 bool wait_for_earlier_train(Train *train, Train trains[]) {
@@ -342,6 +359,11 @@ void check_crossing(Train *train, Train trains[]) {
     /* Train done waiting, claims track */
     track_occupied = true;
 
+    print_timestamp();
+    printf(
+        "Train %2d is ON the main track going %4s\n", 
+        train -> number, train -> direction == EAST ? "East" : "West");
+
     pthread_mutex_unlock(&scheduling_mutex);
     
     /*
@@ -395,8 +417,14 @@ void *process_train(void *arg) {
         consecutive_trains = 1;
     }
 
-    /* Update previous direction, condition of track */
+    /* Update previous direction */
     previous_direction = train -> direction;
+
+    print_timestamp();
+    printf(
+        "Train %2d is OFF the main track after going %4s\n", 
+        train -> number, train -> direction == EAST ? "East" : "West");
+
     track_occupied = false;
 
     /* Signal threads waiting on scheduling, release mutex */
@@ -484,6 +512,9 @@ int main(int argc, char *argv[]) {
     Release mutex 
     */
     pthread_mutex_lock(&scheduling_mutex);
+
+    /* Start simulation before waking all threads */
+    gettimeofday(&start_time, NULL);
 
     start_allowed = true;
 
