@@ -178,17 +178,12 @@ Train *select_next_train() {
             if (east_station_queue -> count > 0) {
                 return peek(east_station_queue);
             }
-            else if (previous_direction == WEST) {
-                if (west_station_queue -> count > 0) {
-                    return peek(west_station_queue);
-                }
-            }
         }
         else if (previous_direction == WEST) {
-            if (west_station.high_priority.count >= 1) {
+            if (west_station.high_priority.count > 0) {
                 return peek(&west_station.high_priority);
             }
-            else if (west_station.low_priority.count >= 1) {
+            else if (west_station.low_priority.count > 0) {
                 return peek(&west_station.low_priority);
             }
         }
