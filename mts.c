@@ -151,28 +151,10 @@ void queue_train(Train *train) {
 
 Train *select_next_train() {
 
-    /* Ensure starvation rule followed */
-    if (consecutive_trains >= 2) {
-        if (previous_direction == EAST) {
-            if (east_station.high_priority.count >= 1) {
-                return peek(&east_station.high_priority);
-            }
-            else if (east_station.low_priority.count >= 1) {
-                return peek(&east_station.low_priority);
-            }
-        }
-        else if (previous_direction == WEST) {
-            if (west_station.high_priority.count >= 1) {
-                return peek(&west_station.high_priority);
-            }
-            else if (west_station.low_priority.count >= 1) {
-                return peek(&west_station.low_priority);
-            }
-        }
-    }
-
     /* Check if there are any high priority trains waiting */
-    bool high_priority_waiting = east_station.high_priority.count > 0 || west_station.high_priority.count > 0;
+    bool high_priority_waiting = 
+        east_station.high_priority.count > 0 || 
+        west_station.high_priority.count > 0;
 
     /* Pointers to queues that will be considered for scheduling */
     TrainQueue *east_station_queue;
@@ -188,6 +170,28 @@ Train *select_next_train() {
     else {
         east_station_queue = &east_station.low_priority;
         west_station_queue = &west_station.low_priority;
+    }
+
+    /* Ensure starvation rule followed */
+    if (consecutive_trains >= 2) {
+        if (previous_direction == EAST) {
+            if (east_station_queue -> count > 0) {
+                return peek(east_station_queue);
+            }
+            else if (previous_direction == WEST) {
+                if (west_station_queue -> count > 0) {
+                    return peek(west_station_queue);
+                }
+            }
+        }
+        else if (previous_direction == WEST) {
+            if (west_station.high_priority.count >= 1) {
+                return peek(&west_station.high_priority);
+            }
+            else if (west_station.low_priority.count >= 1) {
+                return peek(&west_station.low_priority);
+            }
+        }
     }
 
     /* Look at first train in each selected queue w/o removing it 
@@ -365,18 +369,6 @@ void check_crossing(Train *train, Train trains[]) {
         train -> number, train -> direction == EAST ? "East" : "West");
 
     pthread_mutex_unlock(&scheduling_mutex);
-    
-    /*
-    train checks if it can cross per scheduling rules
-    
-    while train cannot cross:
-        - wait on scheduling convar
-        - check rules again
-    
-    remove train from queue
-    mark track occupied
-    return with train ready to cross
-    */
 }
 
 void *process_train(void *arg) {
@@ -478,7 +470,12 @@ int main(int argc, char *argv[]) {
     /* Ensure file closed correctly */
     if (file_closed == -1) {
         return -1;
-    } 
+    }
+
+    /* File contains no trains */
+    if (train_count == 0) {
+        return 0;
+    }
 
     /*
     initialize:
