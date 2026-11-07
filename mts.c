@@ -9,6 +9,26 @@
 #define MAX_TRAINS 65
 #define CONVERT_TO_US 100000
 
+/*** REFERENCES ***
+
+In addition to class slides and tutorials:
+
+https://pubs.opengroup.org/onlinepubs/007908799/xsh/pthread.h.html used 
+for extra information surrounding all pthread functions used in p2
+
+https://pubs.opengroup.org/onlinepubs/007908799/headix.html used for 
+information regarding the following libraries and associated functions
+    unistd.h
+        - usleep()
+    sys/time.h
+        - gettimeofday()
+
+https://www.codecademy.com/resources/docs/c/enums used for examples
+of defining enums
+
+
+*/
+
 typedef enum {
     NONE, // 0
     EAST, // 1
@@ -20,7 +40,7 @@ typedef enum {
     HIGH // 1
 } Priority;
 
-/* Train struct */
+/* Info for one train including its loading status */
 typedef struct {
     int number;
     Direction direction;
@@ -30,12 +50,13 @@ typedef struct {
     bool done_loading;
 } Train;
 
+/* Arguments passed to each train thread */
 typedef struct {
     Train *train;
     Train *all_trains;
 } ThreadArgs;
 
-/* train queue struct */
+/* Circular queue of train pointers ordered by loading time and train ID */
 typedef struct {
     Train *trains[MAX_TRAINS];
     int front;
@@ -43,34 +64,48 @@ typedef struct {
     int count;
 } TrainQueue;
 
-/* station struct */
+/* Each station contains a high priority and low priority queue */
 typedef struct {
     TrainQueue high_priority;
     TrainQueue low_priority;
 } Station;
 
-/* Shared scheduling state */
+/* Shared state used to coordinate access to maint track */
 Station east_station;
 Station west_station;
 
+/* Only one train can occupy track at a time */
 bool track_occupied = false;
+
+/* Track recent crossing for starvation rules */
 Direction previous_direction = NONE;
 int consecutive_trains = 0;
+
+/* Protects shared queues, track state, start flag */
 pthread_mutex_t scheduling_mutex;
+
+/* Signals for changes in train readiness & track status */
 pthread_cond_t start_convar;
 pthread_cond_t scheduling_convar;
 bool start_allowed = false;
+
+/* Reference time for output timestamps */
 struct timeval start_time;
 
-/* Mutex */
-/* Condition variables */
 
+/* Reset queue to empty state */
 void initialize_queue(TrainQueue *queue) {
     queue -> front = 0;
     queue -> rear = -1;
     queue -> count = 0;
 }
 
+/***  Customized queue operation implementations 
+based on basic queue operation implementations provided by:
+https://www.geeksforgeeks.org/c/c-program-to-implement-circular-queue/ ***/
+
+/* Insert by loading time
+   Break ties w/ lower train ID */
 void enqueue(TrainQueue *queue, Train *train) {
     if (queue -> count == 0) {
         queue -> rear = (queue -> rear + 1) % MAX_TRAINS;
@@ -78,7 +113,8 @@ void enqueue(TrainQueue *queue, Train *train) {
         queue -> count++;
         return;
     }
-        
+    
+    /* Fine where train belongs in queue order */
     int insert_position = queue -> count;
 
     for (int i = 0; i < queue -> count; i++) {
@@ -93,6 +129,7 @@ void enqueue(TrainQueue *queue, Train *train) {
         }
     }
 
+    /* Shift later entries by one to make room */
     for (int i = queue -> count; i > insert_position; i--) {
         int destination_index = (queue -> front + i) % MAX_TRAINS;
         int source_index = (queue -> front + i - 1) % MAX_TRAINS;
@@ -105,6 +142,7 @@ void enqueue(TrainQueue *queue, Train *train) {
     queue -> count++;
 }
 
+/* Remove & return train at front of queue */
 Train *dequeue(TrainQueue *queue) {
     if (queue -> count == 0) {
         return NULL;
@@ -117,6 +155,7 @@ Train *dequeue(TrainQueue *queue) {
     return removed_train;
 }
 
+/* Return train at front w/o removing it */
 Train *peek(TrainQueue *queue) {
     if (queue -> count == 0) {
         return NULL;
@@ -125,12 +164,13 @@ Train *peek(TrainQueue *queue) {
     return queue -> trains[queue -> front];
 }
 
+/* Place loaded train in queue for departure station and priority */
 void queue_train(Train *train) {
 
-    /* Check if train is travelling East */
+    /* Eastbound trains depart from west station */
     if (train -> direction == EAST) {
 
-        /* Determine priority level, add to appropriate West station queue */
+        /* Determine priority level */
         if (train -> priority == LOW) {
             enqueue(&west_station.low_priority, train);
         }
@@ -138,7 +178,7 @@ void queue_train(Train *train) {
             enqueue(&west_station.high_priority, train);
         }
     }
-    /* Train is travelling West, add to appropriate East station queue*/
+    /* Westbound trains depart from east station */
     else {
         if (train -> priority == LOW) {
             enqueue(&east_station.low_priority, train);
@@ -149,9 +189,10 @@ void queue_train(Train *train) {
     }
 }
 
+/* Choose next eligible train w/o removing it from queue */
 Train *select_next_train() {
 
-    /* Check if there are any high priority trains waiting */
+    /* High priority takes precedence */
     bool high_priority_waiting = 
         east_station.high_priority.count > 0 || 
         west_station.high_priority.count > 0;
@@ -160,13 +201,12 @@ Train *select_next_train() {
     TrainQueue *east_station_queue;
     TrainQueue *west_station_queue;
 
-    /* 
-    Select high priority queues if any trains waiting 
-    Otherwise select low priority queues */
+    /* Select high priority queues if any trains waiting */
     if (high_priority_waiting) {
         east_station_queue = &east_station.high_priority;
         west_station_queue = &west_station.high_priority;
     }
+    /* Otherwise select low priority queues */
     else {
         east_station_queue = &east_station.low_priority;
         west_station_queue = &west_station.low_priority;
@@ -175,8 +215,11 @@ Train *select_next_train() {
     /* Ensure starvation rule followed */
     if (consecutive_trains >= 2) {
         if (previous_direction == EAST) {
-            if (east_station_queue -> count > 0) {
-                return peek(east_station_queue);
+            if (east_station.high_priority.count > 0) {
+                return peek(&east_station.high_priority);
+            }
+            else if (east_station.low_priority.count > 0) {
+                return peek(&east_station.low_priority);
             }
         }
         else if (previous_direction == WEST) {
@@ -190,11 +233,12 @@ Train *select_next_train() {
     }
 
     /* Look at first train in each selected queue w/o removing it 
-       Trains depart from station opposite their travelling direction */
+       Eastbound trains queued at west station
+       Westbound trains queued at east station */
     Train *eastbound_train = peek(west_station_queue);
     Train *westbound_train = peek(east_station_queue);
 
-    /* If only one direction has a train waiting select that train */
+    /* If only one direction has a train waiting, select it */
     if (eastbound_train == NULL && westbound_train != NULL) {
         return westbound_train;
     }
@@ -203,14 +247,14 @@ Train *select_next_train() {
         return eastbound_train;
     }
 
-    /* If neither direction has a train waiting, don't select anything */
+    /* No trains waiting */
     if (westbound_train == NULL && eastbound_train == NULL) {
         return NULL;
     }
 
     /* If both directions have waiting trains of same priority:
         - choose direction opposite to previous crossing
-        - if no train cross yet, choose eastbound           */
+        - if no train cross yet, choose eastbound */
     if (previous_direction == EAST) {
         return westbound_train;
     }
@@ -219,12 +263,9 @@ Train *select_next_train() {
     }
 }
 
+/* Read up to 65 entires
+   Assign ID's in input-file order */
 void read_input_file(FILE *input_file, Train trains[], int *train_count) {
-    /*
-    read input
-    parse args
-    populate train struct array
-    */
 
     char direction_and_priority;
     int loading_time;
@@ -256,6 +297,7 @@ void read_input_file(FILE *input_file, Train trains[], int *train_count) {
     }
 }
 
+/* Print elapsed simulation time as HH:MM:SS.t */
 void print_timestamp() {
     struct timeval current_time;
     gettimeofday(&current_time, NULL);
@@ -264,6 +306,7 @@ void print_timestamp() {
         (current_time.tv_sec - start_time.tv_sec) * 1000000L + 
         (current_time.tv_usec - start_time.tv_usec);
 
+    /* Convert elapsed microseconds into tenths */
     long total_tenths = time_elapsed_us / 100000;
 
     long hours = total_tenths / 36000;
@@ -274,19 +317,20 @@ void print_timestamp() {
     printf("%02ld:%02ld:%02ld.%01ld ", hours, minutes, seconds, tenths);
 }
 
+/* Simulate loading, enqueue train, accounce when it's ready */
 void prepare_train(Train *train) {
     
     /* Train sleeps for specified loading time in microseconds */
     usleep(train -> loading_time * CONVERT_TO_US);
 
-    /* Acquire mutex before entering correct FIFO queue, wait if already acquired */
+    /* Acquire mutex before accessing queue insertion and loading state */
     pthread_mutex_lock(&scheduling_mutex);
 
     queue_train(train);
 
     train -> done_loading = true;
 
-    /* Notify waiting trains after a train loads & enters queue */
+    /* Wake threads that may be eligible for crossing */
     pthread_cond_broadcast(&scheduling_convar);
 
     /* Create string version of direction enum for output */
@@ -302,15 +346,14 @@ void prepare_train(Train *train) {
     print_timestamp();
     printf("Train %2d is ready to go %4s\n", train -> number, direction_string);
 
-    /* Release mutex so another thread may acquire it */
+    /* Release mutex */
     pthread_mutex_unlock(&scheduling_mutex);
 }
 
+/* Prevent race conditions when two trains have same direction, priority, loading time */
 bool wait_for_earlier_train(Train *train, Train trains[]) {
 
-    /* If a train that appears earlier in the input than current train and has same
-       direction, priority and loading time, current train must wait for that earlier 
-       train to load before crossing if not done already */
+    /* Train w/ lower ID number but other matching attributes must load first */
     for (int i = 0; i < train -> number; i++) {
         if (trains[i].direction == train -> direction && 
             trains[i].priority == train -> priority && 
@@ -320,13 +363,14 @@ bool wait_for_earlier_train(Train *train, Train trains[]) {
                 }
         }
     }
-    /* Otherwise train may cross */
+    /* Otherwise current train may cross */
     return false;
 }
 
+/* Wait until this train selected and track is free, then enter it */
 void check_crossing(Train *train, Train trains[]) {
 
-    /* Acquire mutex before accessing shared variable */
+    /* Acquire mutex before accessing track state and train queues */
     pthread_mutex_lock(&scheduling_mutex);
 
     /* While track is occupied or another train has priority:
@@ -339,9 +383,7 @@ void check_crossing(Train *train, Train trains[]) {
         pthread_cond_wait(&scheduling_convar, &scheduling_mutex);
     }
 
-    /* Remove selected train from its station's queue 
-       Eastbound trains depart from west station
-       Westbound trains depart from east station */
+    /* Remove selected train from its station's queue */
     if (train -> direction == EAST && train -> priority == HIGH) {
         dequeue(&west_station.high_priority);
     }                                                
@@ -355,7 +397,7 @@ void check_crossing(Train *train, Train trains[]) {
         dequeue(&east_station.low_priority);
     }
 
-    /* Train done waiting, claims track */
+    /* Claim track before allowing other threads to schedule */
     track_occupied = true;
 
     print_timestamp();
@@ -366,15 +408,15 @@ void check_crossing(Train *train, Train trains[]) {
     pthread_mutex_unlock(&scheduling_mutex);
 }
 
+/* Wait for common start, load, cross, and finish */
 void *process_train(void *arg) {
 
-    /* Convert generic arg to a ThreadArgs pointer
-       Access pointer to train and all_trains through args */
+    /* Recover thread's train & array used for tie-breaking */
     ThreadArgs *args = (ThreadArgs *)arg;
     Train *train = args -> train;
     Train *all_trains = args -> all_trains;
 
-    /* Acquire mutex before accessing shared variable */
+    /* Wait for main to create all threads and set start time */
     pthread_mutex_lock(&scheduling_mutex);
 
     /* While waiting for all threads to be created:
@@ -385,7 +427,7 @@ void *process_train(void *arg) {
         pthread_cond_wait(&start_convar, &scheduling_mutex);
     }
 
-    /* Release mutex, begin loading & queuing, check crossing status */
+    /* Begin loading & queuing, check crossing status */
     pthread_mutex_unlock(&scheduling_mutex);
     prepare_train(train);
     check_crossing(train, all_trains);
@@ -393,10 +435,10 @@ void *process_train(void *arg) {
     /* Put train to sleep for crossing time in microseconds */
     usleep(train -> crossing_time * CONVERT_TO_US);
 
+    /* Protect completion update, release of track */
     pthread_mutex_lock(&scheduling_mutex);
 
-    /* If direction of train that just crossed == direction of previous train, inc consecutive_train
-       Otherwise consecutive_train = 1 (reset count) */
+    /* Count consecutive crossings in same direction */
     if (train -> direction == previous_direction) {
         consecutive_trains++; 
     }
@@ -418,29 +460,14 @@ void *process_train(void *arg) {
     pthread_cond_broadcast(&scheduling_convar);
     pthread_mutex_unlock(&scheduling_mutex);
 
-    /* 
-    check_crossing()
-    print train ON track
-    release mutex
-    sleep for crossing time
-    reacquire mutex
-    mark track unoccupied
-    print train OFF track
-    update:
-        - previous direction
-        -consectutive train information
-    wait waiting trains
-    release mutex
-    terminate thread
-    */
     return NULL;
 }
 
 int main(int argc, char *argv[]) {
     
     Train trains[MAX_TRAINS]; /* Train structs */
-    ThreadArgs thread_args[MAX_TRAINS]; /* Thread identifiers */
-    pthread_t train_threads[MAX_TRAINS]; /* Argument structs */
+    ThreadArgs thread_args[MAX_TRAINS]; /* Thread argument structs */
+    pthread_t train_threads[MAX_TRAINS]; /* Thread identifiers */
 
     /* Counter to keep track of amt of trains in trains[] */
     int train_count = 0;
@@ -472,61 +499,61 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    /*
-    initialize:
-        - station queue
-        - shared scheduling state
-        - mutex
-        - convars
-    */
-
     /* Initialize station queues */
     initialize_queue(&east_station.high_priority);
     initialize_queue(&east_station.low_priority);
     initialize_queue(&west_station.high_priority);
     initialize_queue(&west_station.low_priority);
 
-    /* Initialize scheduling mutex, convars */
-    pthread_mutex_init(&scheduling_mutex, NULL);
-    pthread_cond_init(&start_convar, NULL);
-    pthread_cond_init(&scheduling_convar, NULL);
+    /* Initialize scheduling mutex and convars with error checking */
+    if (pthread_mutex_init(&scheduling_mutex, NULL) != 0) {
+        return 1;
+    }
+    if (pthread_cond_init(&start_convar, NULL) != 0) {
+        pthread_mutex_destroy(&scheduling_mutex);
+        return 1;
+    }
+    if (pthread_cond_init(&scheduling_convar, NULL) != 0) {
+        pthread_cond_destroy(&start_convar);
+        pthread_mutex_destroy(&scheduling_mutex);
+        return 1;
+    }
 
     /* Create a thread for each train, add it to train_threads[] */
     for (int i = 0; i < train_count; i++) {
         thread_args[i].train = &trains[i];
         thread_args[i].all_trains = trains;
-        pthread_create(&train_threads[i], NULL, process_train, &thread_args[i]);
+
+        if (pthread_create(&train_threads[i], NULL, process_train, &thread_args[i]) != 0) {
+            exit(1);
+        }
     }
 
-    /* 
-    Acquire mutex before changing shared variable
-    Wake all threads waiting on start_allowed == true
-    Release mutex 
-    */
+    /* Acquire mutex before changing shared variable */
     pthread_mutex_lock(&scheduling_mutex);
 
-    /* Start simulation before waking all threads */
+    /* Record simulation start time */
     gettimeofday(&start_time, NULL);
 
+    /* Allow all train threads to begin loading */
     start_allowed = true;
-
     pthread_cond_broadcast(&start_convar);
 
     pthread_mutex_unlock(&scheduling_mutex);
 
     /* Make main() wait for ALL train threads to finish before continuing */
     for (int i = 0; i < train_count; i++) {
-        pthread_join(train_threads[i], NULL);
+        if (pthread_join(train_threads[i], NULL) != 0) {
+            exit(1);
+        }
     }
 
     /* Destory mutex and convars */
+    int cleanup_failed = 0;
+    
     pthread_mutex_destroy(&scheduling_mutex);
     pthread_cond_destroy(&start_convar);
     pthread_cond_destroy(&scheduling_convar);
     
-    /*
-    destroy convars
-    */
-
     return 0;
 }
