@@ -1,93 +1,73 @@
-# p2 Design
+# Multithreaded Train Scheduler
 
-1. In addition to the main thread, one thread will be created for each train in the input file. Each train thread will:
-    - wait for the simulation to start
-    - simulate its loading time
-    - add itself to the correct station queue once loaded
-    - wait until its allowed to cross according to scheduling rules
-    - simulate its crossing time once allowed
-    - terminate after crossing the track
+A multithreaded train scheduling simulation developed in C using POSIX threads (pthreads). The program simulates trains arriving at two stations and coordinates their movement across a shared, single-track railway. This project focuses on concurrency, thread synchronization, priority-based scheduling, and starvation prevention.
 
-2. There will be no overall controller thread. 
-    - Each train thread will handle its own loading, waiting, and crossing. 
-    - Once loaded, train threads will coordinate using the queues, mutex, and condition variables. 
-    - Scheduling rules will determine when each waiting train is 
-eligible to cross
+# Features
+- Multithreading: Each train is represented by an independent thread, allowing trains to load concurrently.
+- Priority-Based Scheduling: High-priority trains are generally scheduled before low-priority trains.
+- FIFO Queue Management: Trains are organized by loading time, with train ID used to break ties.
+- Direction Alternation: When eligible trains are waiting in both directions, the scheduler generally favours the direction opposite the   previous crossing.
+- Starvation Prevention: After two consecutive trains cross in the same direction, a waiting train travelling in the opposite direction    is given an opportunity to cross.
+- Thread Synchronization: Mutexes and condition variables coordinate access to shared scheduling data and ensure only one train occupies   the track at a time.
 
-3. One mutex will be used for the shared scheduling state. It will protect:
-    - the four station queues
-    - the state of the main track (occupied or unoccupied)
-    - information needed for scheduling such as the direction of the previously dispatched trains and the number of consecutive trains
-      travelling in that direction
+# Technologies
+- Language: C
+- Concurrency: POSIX Threads (pthreads)
+- Synchronization: Mutexes and condition variables
+- Development Environment: Linux
+- Build Tool: Make
 
-   A train must acquire this mutex before reading or modifying any of this shared information. The mutex will not remain locked while a train
-   is crossing the main track, instead the track will be marked as occupied before the mutex is released while the crossing occurs.
+# How It Works
+The simulation reads train information from an input file. Each train has a direction, priority level, loading time, and crossing time.
+1. Initialization: The program creates a thread for each train and synchronizes their starting point.
+2. Loading: Each train independently simulates its loading time before entering the appropriate station queue.
+3. Scheduling: The scheduler selects the next eligible train based on priority, loading order, direction, and starvation prevention         rules.
+4. Crossing: The selected train acquires exclusive access to the main track and simulates its crossing time.
+5. Completion: Once the train finishes crossing, it releases the track and notifies waiting threads so another train can proceed.
+The program outputs timestamped messages indicating when each train finishes loading, enters the main track, and completes its crossing.
 
-4. The main thread won't be involved in the scheduling of trains. It will:                                              
-    - read the input file
-    - initialize the queues, mutex, and condition variables
-    - create the train threads (one per train)
-    - signal the train threads to begin once they've all been created (i.e. so simulation start time is the same for all)
-    - wait for all train threads to finish using pthread_join()
-    - perform cleanup and terminate once all other trains have finished
+# Running the Program
+Requirements:
+- Linux environment
+- GCC compiler
+- POSIX threads support
+- Make
 
-5. The two stations will be represented using structs. Each station will have two FIFO queues for the two types of priority. This results in   
-   four queues total:
-    - Eastbound high priority (E)
-    - Eastbound low priority (e)
-    - Westbound high priority (W)
-    - Westbound low priorty (w)
+# Compilation
+From the project directory, run: 
 
-   The West station will contain the eastbound queues and the East station will contain the westbound queues, since a train's direction
-   describes where its travelling, not where it starts. Once a train is done loading, it's added to the appropriate queue. Trains within a 
-   queue will be ordered by when they finish loading. If two trains finish loading at the same time, their order in the input file will break
-   the tie.
+    make
 
-6. The shared scheduling mutex will prevent concurrent modification. A train must acquire the mutex before accessing or modifying:
-   - any of the four queues
-   - track availability
-   - other shared scheduling information
+# Execution
+Run the program with an input file: 
 
-   Once it's finished accessing/modifying the shared data, it will release the mutex so another train thread can acquire it.
+    ./mts input.txt
 
-7. Two condition variables will be used: start condition variable and scheduling condition variable
+Each line of the input file follows this format: 
 
-   Start condition variable
-    - condition: whether the simulation has started
-    - associated mutex: the shared scheduling mutex
-    - each train initially waits on this convar
-    - once the main thread has created all train threads, it sets the simulation as started and wakes them
-    - after a train wakes and reacquires the mutex, it can start its loading process
+    direction loading_time crossing_time
+- E / W: High-priority eastbound or westbound train
+- e / w: Low-priority eastbound or westbound train
+- loading_time: Time required to load, in tenths of a second
+- crossing_time: Time required to cross, in tenths of a second
 
-   Scheduling condition variable
-    - condition: whether the scheduling state has changed such that a waiting may be allowed to cross
-    - associated mutex: the shared scheduling mutex as the condition depends on queues, track availability, and previous crossing information
-    - a loaded train waits on this convar if it's not currently eligible to cross
-    - once awakened and after reacquiring the mutex, the train can check the scheduling rules again
-        - if eligible -> mark track as occupied and continue
-        - if ineligible -> wait on convar again
+Example input:
 
-8. Overall sample algorithm:
+    E 2 5
+    w 1 3
+    e 4 2
+    W 3 4
 
-    - main reads input file and creates thread for each train
-    - trains wait on start convar
-    - once all threads created, main starts simulation and wakes 
-    - all train threads
-    - trains sleep for specified loading times
-    - once loaded, train acquires mutex and enters corresponding
-      FIFO queue
-    - train checks if it can cross per scheduling rules
-    - if train can't cross, wait on scheduling convar and check
-      again when awakened
-    - if train can cross, remove self from queue and mark track 
-      as occupied
-    - train releases mutex, sleeps during crossing time
-    - after crossing, train reacquires mutex and marks track as
-      unoccupied
-    - train updates previous direction and consecutive-train
-     information
-    - train wakes waiting trains so they can check scheduling
-      rules
-    - train releases mutex and terminates
-    - main joins all threads, terminates after every train has
-      finished
+# Key Learning Outcomes
+
+Through this project, I gained practical experience with:
+- Creating and managing multiple threads in C.
+- Using mutexes to protect shared data and prevent race conditions.
+- Coordinating threads using condition variables.
+- Implementing scheduling rules while maintaining fairness between competing threads.
+- Debugging concurrent programs, where thread execution order can vary between runs.
+- Testing scheduling behaviour under different combinations of train priorities, directions, and loading times.
+
+# Project Background
+
+Developed as part of CSC 360: Operating Systems at the University of Victoria. The implementation demonstrates core operating systems concepts through a practical concurrency and scheduling problem.
